@@ -21,6 +21,6 @@ Additionally, if you would like to run the glmnet comparison, you will need to i
 - R: http://cran.us.r-project.org/
 - glmnet: http://cran.r-project.org/web/packages/glmnet/index.html
 - doMC (for parallel processing in R - Linux): http://cran.r-project.org/web/packages/doMC/index.html
-- doSnow (for parallel processing in R - Windows): http://cran.r-project.org/web/packages/doSNOW/index.html
+- doSNOW (for parallel processing in R - Windows): http://cran.r-project.org/web/packages/doSNOW/index.html
 
 Each script is a self-contained file that corresponds to one set of results in the manuscript.
