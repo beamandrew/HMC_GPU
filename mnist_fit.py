@@ -21,21 +21,37 @@ import time as t
 import scikits.cuda.linalg as linalg
 linalg.init()
 
+''' 
+CPU version of the softmax function
+'''
+def softmax_cpu(w):
+    dist = np.zeros(w.shape)
+    for i in range(0,dist.shape[0]):
+        dist[i] = np.exp(w[i])/(np.exp(w[i]).sum()) 
+    return dist
+
 ########## BEGIN *GPU* CODE ##########
 # Create a softmax kernel to be used for the GPU-version of softmax(XB)
 gpu_kernel = SourceModule("""
+// M and N are dimensions of input matrix (rows by columns)
 __global__ void softmax(float *output, int M, int N)
 {
 	 #include <math.h>
       int row = blockIdx.y*blockDim.y + threadIdx.y;
-      float sum = 0;     
+      float sum = 0;      
       if(row < M) {// && col < N) {
+          // This is done to ensure numerical stability
+          float max = output[row*N];
           for(int i=0;i<N;i++){
-             sum += exp(output[row*N + i]);
-           }
-       	for(int i=0;i<N;i++){
-             output[row*N + i] = exp(output[row*N + i])/sum;
-		}	           
+             float val = output[row*N + i];
+             if(val > max) {max = val;}
+          }          
+          for(int i=0;i<N;i++){
+             sum += exp(output[row*N + i]-max);
+          }
+   	    for(int i=0;i<N;i++){
+             output[row*N + i] = exp(output[row*N + i]-max)/sum;
+	    }	           
         }                 
                   
 }
@@ -62,7 +78,9 @@ def grad_beta_prior(beta):
 Calculates the density value of the log-likelihood
 '''
 def multinomial_log_likelihood(softmax_vals,Y,one_n_trans,one_c):
-    prod = Y*cumath.log(softmax_vals)
+    # add small amount to protect against log(0)
+    small_val = 1e-9
+    prod = Y*cumath.log(softmax_vals+small_val)
     prod = linalg.dot(one_n_trans,prod)
     prod = linalg.dot(prod,one_c)
     return(prod.get())
@@ -151,17 +169,15 @@ def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps,T
         vals.append(0)
     
     if verbose:
-        print '----------------------------'
-        print 'Current U: ' + str(current_u)
-        print 'Proposed U: ' + str(proposed_u)      
-        print 'Current K: ' + str(current_k)
-        print 'Proposed K: ' + str(proposed_k)      
+        print 'Current value of log-kernel: ' + str(current_u)
+        print 'Proposed value of log-kernel: ' + str(proposed_u)      
+        print 'Current momentum: ' + str(current_k)
+        print 'Proposed momentum: ' + str(proposed_k)      
         print 'Total diff: ' + str(diff)
         print 'Current log-like: ' + str(init_ll)
         print 'Proposed log-like: ' + str(final_ll)
         print 'Comparing alpha of: ' + str(alpha) + ' to uniform of: ' + str(u)
         print msg
-        print '----------------------------'
     
     return(vals)
 
@@ -173,6 +189,7 @@ creates GPU objects, and runs the simulation under using the specified simulatio
 parameters. 
 
 Returns: List object containing posterior samples for regression coefficients 
+Note beta_post is returned as a CPU object to avoid eating up GPU memory which may be limited
 '''
 def HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final,T,anneal_rate,verbose):
         
@@ -212,22 +229,26 @@ def HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final,T,annea
     t0 = t.time()
     total_accepts = 0.0
     for i in range(0,n_burnin):
+        print '----------------------------'
         print 'Burnin Iteration: ' + str(i)
         beta, accept = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps_burnin,T,verbose=True)
         total_accepts += accept
         print 'T: ' + str(T)
         print 'Acceptance rate: ' + str(total_accepts/(i+1))
+        print '----------------------------'
         T = 1.0 + T*anneal_rate
     
     total_accepts = 0.0
     T = 1.0
     beta_post = list()
     for i in range(0,n_samples):
+        print '----------------------------'
         print 'Sampling Iteration: ' + str(i)
         beta, accept = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps_final,T,verbose=True)
         beta_post.append(beta.get())
         total_accepts += accept
         print 'Acceptance rate: ' + str(total_accepts/(i+1))
+        print '----------------------------'
     
     t1 = t.time()
     print 'Time taken: ' + str(t1-t0)
@@ -255,14 +276,14 @@ X_cpu = np.hstack( (np.ones((len(X_cpu),1)),X_cpu) )
 X_test_cpu = np.hstack( (np.ones((len(X_test_cpu),1)),X_test_cpu) )
 
 # Sim parameters
-n_burnin = 15 # Burnin iterations before sampling starts
+n_burnin = 100 # Burnin iterations before sampling starts
 n_samples = 100 # Number of posterior samples
 
 # HMC parameters
 L = 100
-eps_burnin = 5-4 # Step size during burning, typically larger than during sampling
-eps_final = 1e-4
-T = 100.0
+eps_burnin = 1e-4 # Step size during burning, typically larger than during sampling
+eps_final = 1e-5
+T = 1000.0
 anneal_rate = 0.9
 # Print progress? #
 verbose = True
