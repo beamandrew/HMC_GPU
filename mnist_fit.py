@@ -1,125 +1,46 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Aug 14 11:39:25 2013
-
 @author: Andrew Beam
 This file can be used to replicate the multinomial regression example using 
 the MNIST data set.
+
+Code to accompany the manuscript:
+    Beam, A.L., Ghosh, S.J., Doyle, J. Fast Hamiltonian Monte Carlo Using GPU Computing.
 """
 
-########## BEGIN CPU CODE ##########
-'''
-CPU VERSION
-Calculates the gradient of the log-likelihood with respect to each beta
-'''
-def grad_log_like_beta_cpu(softmax_vals,X,Y):
-    diff = Y-softmax_vals
-    return(np.dot(X.T,diff))
+# Load the required libraries #
+import numpy as np
+import pycuda.driver as cuda
+from pycuda import gpuarray
+import pycuda.autoinit
+from pycuda.compiler import SourceModule
+import pycuda.cumath as cumath
+import pycuda.curandom as curandom
+import time as t
 
-'''
-CPU VERSION
-Calculates the gradient of the log-prior density with respect to each beta
-'''
-def grad_beta_prior_cpu(beta):
-    gB_prior = -(2.0*beta)/(beta*beta + 1)
-    return(gB_prior) 
-
-'''
-CPU VERSION
-Calculates the density value of the log-likelihood
-'''
-def multinomial_log_likelihood_cpu(softmax_vals,Y,one_n_trans,one_c):
-    prod = Y*np.log(softmax_vals)
-    prod = np.dot(one_n_trans,prod)
-    prod = np.dot(prod,one_c)
-    return(prod)
-
-'''
-CPU VERSION
-Calculates the density value of the log-prior
-'''
-def cauchy_prior_log_den_cpu(beta):
-    log_beta_den_vals = -np.log(1 + beta*beta)    
-    return(np.sum(log_beta_den_vals))
-
-'''
-CPU VERSION
-Compute the softmax transformation using the CPU
-'''
-def softmax_cpu(w):
-    dist = np.zeros(w.shape)
-    for i in range(0,dist.shape[0]):
-        dist[i] = np.exp(w[i])/(np.exp(w[i]).sum()) 
-    return dist
-
-'''
-CPU VERSION
-Generates one MCMC sample via HMC simulation - Identical representation as GPU version
-'''
-def HMC_sample_cpu(X,Y,grad_beta,beta,one_n_trans,one_c,momentum,L,eps,verbose=False):    
-    #Initialize the momentum
-    momentum = np.random.normal(size=momentum.shape)
-    
-    softmax_vals = softmax_cpu(np.dot(X,beta))
-    init_ll = multinomial_log_likelihood_cpu(softmax_vals,Y,one_n_trans,one_c)
-    init_prior_val = cauchy_prior_log_den_cpu(beta)
-    current_k = np.sum(momentum*momentum)/2.0
-    current_u = init_ll + init_prior_val
-        
-    #Compute the intial gradient
-    grad_beta = grad_log_like_beta_cpu(softmax_vals,X,Y) + grad_beta_prior_cpu(beta)
-    
-    #take an initial half-step
-    momentum += eps*grad_beta/2.0
-    
-    #Perform L-1 leapfrog steps
-    for step in range(0,L):
-        beta += eps*momentum
-        softmax_vals = softmax_cpu(np.dot(X,beta))
-        #Update the gradient
-        grad_beta = grad_log_like_beta_cpu(softmax_vals,X,Y) + grad_beta_prior_cpu(beta)
-        if step != L:
-            momentum += eps*grad_beta
-    
-    #take a final half-step
-    momentum += eps*grad_beta/2.0
-    
-    final_ll = multinomial_log_likelihood_cpu(softmax_vals,Y,one_n_trans,one_c)
-    proposed_u =  final_ll + cauchy_prior_log_den_cpu(beta)
-    proposed_k = np.sum(momentum*momentum)/2.0 
-    diff = ((proposed_u-proposed_k) - (current_u-current_k))
-    
-    u = np.log(np.random.random(1)[0])
-    alpha = np.min([0,diff])
-    vals = list()
-    if u < alpha:
-        msg = 'Accept!'
-        vals.append(beta)
-        vals.append(1)
-    else:
-        msg = 'Reject!'
-        vals.append(beta_old)
-        vals.append(0)
-    
-    if verbose:
-        print '----------------------------'
-        print 'Current U: ' + str(current_u)
-        print 'Proposed U: ' + str(proposed_u)      
-        print 'Current K: ' + str(current_k)
-        print 'Proposed K: ' + str(proposed_k)      
-        print 'Total diff: ' + str(diff)
-        print 'Current log-like: ' + str(init_ll)
-        print 'Proposed log-like: ' + str(final_ll)
-        print 'Comparing alpha of: ' + str(alpha) + ' to uniform of: ' + str(u)
-        print msg
-        print '----------------------------'
-    
-    return(vals)
-
-
-########## END CPU CODE ##########
+import scikits.cuda.linalg as linalg
+linalg.init()
 
 ########## BEGIN *GPU* CODE ##########
+# Create a softmax kernel to be used for the GPU-version of softmax(XB)
+gpu_kernel = SourceModule("""
+__global__ void softmax(float *output, int M, int N)
+{
+	 #include <math.h>
+      int row = blockIdx.y*blockDim.y + threadIdx.y;
+      float sum = 0;     
+      if(row < M) {// && col < N) {
+          for(int i=0;i<N;i++){
+             sum += exp(output[row*N + i]);
+           }
+       	for(int i=0;i<N;i++){
+             output[row*N + i] = exp(output[row*N + i])/sum;
+		}	           
+        }                 
+                  
+}
+""")
+
 '''
 *GPU VERSION*
 Calculates the gradient of the log-likelihood with respect to each beta
@@ -171,7 +92,7 @@ def softmax(XB):
 *GPU* VERSION
 Generates one MCMC sample via HMC simulation
 '''
-def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps,verbose=False):
+def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps,T,verbose):
     
     # Fill exisitng GPU object to initialize # 
     rng.fill_normal(momentum) 
@@ -181,7 +102,7 @@ def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps,v
     softmax(softmax_vals)
     init_ll = multinomial_log_likelihood(softmax_vals,Y,one_n_trans,one_c)
     init_prior_val = cauchy_prior_log_den(beta)
-    current_k = np.log(gpuarray.sum(momentum*momentum).get()/2.0)
+    current_k = gpuarray.sum(momentum*momentum).get()/2.0
     
     # Posterior is log-like + log_prior 
     current_u = init_ll + init_prior_val    
@@ -214,7 +135,7 @@ def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps,v
     
     final_ll = multinomial_log_likelihood(softmax_vals,Y,one_n_trans,one_c)
     proposed_u = final_ll + cauchy_prior_log_den(beta)
-    proposed_k = np.log(gpuarray.sum(momentum*momentum).get()/2.0)
+    proposed_k = gpuarray.sum(momentum*momentum).get()/2.0
     diff = ((proposed_u-proposed_k) - (current_u-current_k))/T
     
     u = np.log(np.random.random(1)[0])
@@ -246,7 +167,14 @@ def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps,v
 
 ########## END *GPU* CODE ##########
 
-def HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final):
+'''
+This function performs the HMC simulation. It takes the X and Y matricies,
+creates GPU objects, and runs the simulation under using the specified simulation
+parameters. 
+
+Returns: List object containing posterior samples for regression coefficients 
+'''
+def HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final,T,anneal_rate,verbose):
         
     #Store X and Y as GPU arrays
     X = gpuarray.to_gpu(X_cpu.astype(np.float32).copy())
@@ -260,7 +188,7 @@ def HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final):
     rng = curandom.XORWOWRandomNumberGenerator()    
     
     #Define beta as a gpuarray and fill it with random normal data
-    beta = rng.gen_normal((p,c),np.float32)/100.0 
+    beta = rng.gen_normal((p,c),np.float32)/100.0
     grad_beta = gpuarray.zeros((p,c),np.float32)
         
     # Create a mask that keeps beta_k = 0 for identifiability purposes #
@@ -279,22 +207,24 @@ def HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final):
     one_n_trans = gpuarray.zeros((1,N),np.float32) + 1.0
     one_c = gpuarray.zeros((c,1),np.float32) + 1.0
     
-    beta = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps_burnin,verbose=True)[0]
+    # This touches the code to ensure it is compiled before we start timing
+    beta = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps_burnin,T,verbose=False)[0]
     t0 = t.time()
     total_accepts = 0.0
     for i in range(0,n_burnin):
-        print 'Iteration: ' + str(i)
-        print 'T: ' + str(T)
-        beta, accept = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps_burnin,verbose=True)
+        print 'Burnin Iteration: ' + str(i)
+        beta, accept = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps_burnin,T,verbose=True)
         total_accepts += accept
+        print 'T: ' + str(T)
         print 'Acceptance rate: ' + str(total_accepts/(i+1))
-        #T = 1.0 + T*0.9
+        T = 1.0 + T*anneal_rate
     
     total_accepts = 0.0
+    T = 1.0
     beta_post = list()
     for i in range(0,n_samples):
-        print 'Iteration: ' + str(i)
-        beta, accept = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,100,eps_final,verbose=True)
+        print 'Sampling Iteration: ' + str(i)
+        beta, accept = HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,beta_k_mask,momentum,L,eps_final,T,verbose=True)
         beta_post.append(beta.get())
         total_accepts += accept
         print 'Acceptance rate: ' + str(total_accepts/(i+1))
@@ -304,47 +234,7 @@ def HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final):
     return beta_post
 
 
-import numpy as np
-import pycuda.driver as cuda
-from pycuda import gpuarray
-import pycuda.autoinit
-from pycuda.compiler import SourceModule
-from pycuda.elementwise import ElementwiseKernel
-import pycuda.cumath as cumath
-import pycuda.curandom as curandom
-import time as t
-
-import scikits.cuda.linalg as linalg
-import scikits.cuda.misc as cumisc
-linalg.init()
-
-# Load the softmax kernel to be used for the GPU-version of softmax(XB)
-gpu_kernel = SourceModule("""
-__global__ void softmax(float *output, int M, int N)
-{
-	 #include <math.h>
-      int row = blockIdx.y*blockDim.y + threadIdx.y;
-      float sum = 0;     
-      float overflow = 1000000.0;
-      if(row < M) {// && col < N) {
-          for(int i=0;i<N;i++){
-             sum += exp(output[row*N + i]);
-           }
-           if(sum > overflow){
-            sum = overflow;
-           }
-           float val = 0.0;
-        	for(int i=0;i<N;i++){
-             val = exp(output[row*N + i]);
-             if(val > overflow) {
-                val = overflow;         
-             }             
-             output[row*N + i] = val/sum;
-		}	           
-        }                 
-                  
-}
-""")
+# This GPU kernel was created at the begining of the source file #
 softmax_kernel = gpu_kernel.get_function("softmax")
 
 #data_path = '/home/albeam/manuscripts/HMC_GPU/data/minist/'
@@ -370,10 +260,14 @@ n_samples = 100 # Number of posterior samples
 
 # HMC parameters
 L = 100
-eps_burnin = 1e-2 # Step size during burning, typically larger than during sampling
+eps_burnin = 5-4 # Step size during burning, typically larger than during sampling
 eps_final = 1e-4
+T = 100.0
+anneal_rate = 0.9
+# Print progress? #
+verbose = True
 
-beta_posterior = HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final)
+beta_posterior = HMC_simulation(X_cpu,Y_cpu,n_samples,n_burnin,L,eps_burnin,eps_final,T,anneal_rate,verbose)
 
 ## Compute training error using posterior mean ##
 train_errors = 0.0
