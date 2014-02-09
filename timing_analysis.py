@@ -59,7 +59,6 @@ or old (if rejects) sample since it is only being used for timing purposes
 def HMC_sample_cpu(X,Y,grad_beta,beta,one_n_trans,one_c,momentum,L,eps):    
     #Initialize the momentum
     momentum = np.random.normal(size=momentum.shape)
-    
     softmax_vals = softmax_cpu(np.dot(X,beta))
     init_ll = multinomial_log_likelihood_cpu(softmax_vals,Y,one_n_trans,one_c)
     init_prior_val = cauchy_prior_log_den_cpu(beta)
@@ -68,7 +67,6 @@ def HMC_sample_cpu(X,Y,grad_beta,beta,one_n_trans,one_c,momentum,L,eps):
         
     #Compute the intial gradient
     grad_beta = grad_log_like_beta_cpu(softmax_vals,X,Y) + grad_beta_prior_cpu(beta)
-    
     #take an initial half-step
     momentum += eps*grad_beta/2.0
     
@@ -88,7 +86,6 @@ def HMC_sample_cpu(X,Y,grad_beta,beta,one_n_trans,one_c,momentum,L,eps):
     proposed_u =  final_ll + cauchy_prior_log_den_cpu(beta)
     proposed_k = np.sum(momentum*momentum)/2.0 
     diff = ((proposed_u-proposed_k) - (current_u-current_k)) 
-
 
 ########## END CPU CODE ##########
 
@@ -146,10 +143,11 @@ Generates one MCMC sample via HMC simulation - Identical representation as GPU v
 This version is missing the return statement that return the new (if accepted)
 or old (if rejects) sample since it is only being used for timing purposes
 '''
-def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,momentum,L,eps):
+def HMC_sample(X,Y,beta,beta_mask,grad_beta,one_n_trans,one_c,momentum,L,eps):
     
     # Fill exisitng GPU object to initialize # 
     rng.fill_normal(momentum) 
+    momentum = momentum*beta_mask
     
     softmax_vals = linalg.dot(X,beta)
     softmax(softmax_vals)
@@ -161,10 +159,9 @@ def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,momentum,L,eps):
     
     # Compute the intial gradient 
     grad_beta = grad_log_like_beta(softmax_vals,X,Y) + grad_beta_prior(beta)
-    
+    grad_beta = grad_beta * beta_mask
     # Take an initial half-step
     momentum += eps*grad_beta/2.0
-    
     # Perform L-1 leapfrog steps
     for step in range(0,L):
         beta += eps*momentum
@@ -172,6 +169,7 @@ def HMC_sample(X,Y,beta,grad_beta,one_n_trans,one_c,momentum,L,eps):
         softmax_vals = linalg.dot(X,beta)
         softmax(softmax_vals)
         grad_beta = grad_log_like_beta(softmax_vals,X,Y) + grad_beta_prior(beta)
+        grad_beta = grad_beta*beta_mask
         if step != L:
             momentum += eps*grad_beta
     
@@ -238,7 +236,7 @@ sample_times = np.zeros(shape=(len(N)*len(p)*len(k),6))
 
 # HMC parameters
 L = 1
-eps = 0.001
+eps = 1e-4
 
 index = 0
 # Begin timing 
@@ -256,19 +254,28 @@ for i in range(0,len(N)):
             for s in range(0,len(Y)):
                 Y[s,np.random.randint(0,k[l]-1)] = 1 
             
-            beta = np.random.normal(size=(p[j],k[l]),scale=0.1).astype(np.float32)
+            beta = np.random.normal(size=(p[j],k[l]),scale=0.001).astype(np.float32)
             
             # Create GPU objects for X,Y,beta and calculate the gradient of the log-likelihood
             X_gpu = gpuarray.to_gpu(X)
             Y_gpu = gpuarray.to_gpu(Y)
             beta_gpu = gpuarray.to_gpu(beta)
             
+            # Create a mask to ensure identifiability #            
+            beta_mask = np.ones(beta_gpu.shape).astype(np.float32)
+            beta_mask[:,beta_mask.shape[1]-1] = 0
+            beta_mask_gpu = gpuarray.to_gpu(beta_mask)
+            
             # Compute the gradient log-likelihood and time on CPU
             mean_cpu_grad = 0.0
+            
+            # Update only identifiable components of beta #
+            X_id = X[:,0:(p[j]-1)].copy()
+            beta_id = beta[0:(p[j]-1)].copy()
             for x in range(0,reps):
                 t0 = t.time()
-                sm = softmax_cpu(np.dot(X,beta))
-                g_cpu = grad_log_like_beta_cpu(sm,X,Y)
+                sm = softmax_cpu(np.dot(X_id,beta_id))
+                g_cpu = grad_log_like_beta_cpu(sm,X_id,Y)
                 t1 = t.time()
                 mean_cpu_grad += t1-t0
             
@@ -280,6 +287,7 @@ for i in range(0,len(N)):
             sm_gpu = linalg.dot(X_gpu,beta_gpu)
             softmax(sm_gpu)
             g_gpu = grad_log_like_beta(sm_gpu,X_gpu,Y_gpu)
+            g_gpu = g_gpu*beta_mask_gpu
             
             mean_gpu_grad = 0.0
             for x in range(0,reps):
@@ -287,6 +295,7 @@ for i in range(0,len(N)):
                 sm_gpu = linalg.dot(X_gpu,beta_gpu)
                 softmax(sm_gpu)
                 g_gpu = grad_log_like_beta(sm_gpu,X_gpu,Y_gpu)
+                #g_gpu = g_gpu*beta_mask_gpu
                 t1 = t.time()
                 mean_gpu_grad += t1-t0
             
@@ -303,10 +312,14 @@ for i in range(0,len(N)):
             one_n_gpu = gpuarray.to_gpu(one_n_trans)
             one_c_gpu = gpuarray.to_gpu(one_c)
             
+            # Set up identifiability momenmtum #
+            momentum_id = momentum[0:(p[j]-1)].copy()          
+            
             mean_cpu_sample = 0.0
             for x in range(0,reps):
                 t0 = t.time()
-                HMC_sample_cpu(X,Y,beta,g_cpu,one_n_trans,one_c,momentum,L,eps)
+                # Note we pass g_cpu to avoid any time penalty assocaited with array creation
+                HMC_sample_cpu(X_id,Y,g_cpu,beta_id,one_n_trans,one_c,momentum_id,L,eps)
                 t1 = t.time()
                 mean_cpu_sample += t1-t0
             
@@ -314,12 +327,12 @@ for i in range(0,len(N)):
             
             # Now tuime HMC_sample with GPU
             # Touch the code once to make sure everything is compiled 
-            HMC_sample(X_gpu,Y_gpu,beta_gpu,g_gpu,one_n_gpu,one_c_gpu,momentum_gpu,L,eps)
+            HMC_sample(X_gpu,Y_gpu,beta_gpu,beta_mask_gpu,g_gpu,one_n_gpu,one_c_gpu,momentum_gpu,L,eps)
             
             mean_gpu_sample = 0.0
             for x in range(0,reps):
                 t0 = t.time()
-                HMC_sample(X_gpu,Y_gpu,beta_gpu,g_gpu,one_n_gpu,one_c_gpu,momentum_gpu,L,eps)
+                HMC_sample(X_gpu,Y_gpu,beta_gpu,beta_mask_gpu,g_gpu,one_n_gpu,one_c_gpu,momentum_gpu,L,eps)
                 t1 = t.time()
                 mean_gpu_sample += t1-t0           
             
@@ -331,5 +344,5 @@ for i in range(0,len(N)):
             index += 1
             #print 'Configuration ' + str(i) + ',' + str(j) + ',' + str(l) + ' timings: CPU - ' + str(mean_cpu) + ' GPU - ' + str(mean_gpu) + ' Speedup: ' + str(mean_cpu/mean_gpu)
 
-np.savetxt('timings_grad.csv',grad_times,delimiter=',')
-np.savetxt('timings_sample.csv',sample_times,delimiter=',')
+np.savetxt('/home/albeam/manuscripts/HMC_GPU/timings/timings_grad.csv',grad_times,delimiter=',')
+np.savetxt('/home/albeam/manuscripts/HMC_GPU/timings/timings_sample.csv',sample_times,delimiter=',')
