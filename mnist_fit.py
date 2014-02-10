@@ -23,6 +23,7 @@ linalg.init()
 
 ''' 
 CPU version of the softmax function
+Used only at end of simulation for prediction
 '''
 def softmax_cpu(w):
     dist = np.zeros(w.shape)
