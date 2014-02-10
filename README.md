@@ -24,4 +24,9 @@ Additionally, if you would like to run the glmnet comparison, you will need to i
 - doMC (for parallel processing in R - Linux): http://cran.r-project.org/web/packages/doMC/index.html
 - doSNOW (for parallel processing in R - Windows): http://cran.r-project.org/web/packages/doSNOW/index.html
 
-Each script is a self-contained file that corresponds to one set of results in the manuscript. The first time you run the code you may recieve some text indicating compiler warnings. This is expected and can be safely ignored.
+Each script is a self-contained file that corresponds to one set of results in the manuscript. The first time you run the
+code you may recieve some text indicating compiler warnings. This is expected and can be safely ignored.
+
+The MNIST data used in the maunscript can be found here:
+
+http://yann.lecun.com/exdb/mnist/
