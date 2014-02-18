@@ -53,7 +53,7 @@ def softmax_cpu(w):
 '''
 CPU VERSION
 Generates one MCMC sample via HMC simulation - Identical representation as GPU version
-This version is missing the return statement that return the new (if accepted)
+This version is missing the return statement that returns the new (if accepted)
 or old (if rejects) sample since it is only being used for timing purposes
 '''
 def HMC_sample_cpu(X,Y,grad_beta,beta,one_n_trans,one_c,momentum,L,eps):    
@@ -139,8 +139,8 @@ def softmax(XB):
 
 '''
 *GPU* VERSION
-Generates one MCMC sample via HMC simulation - Identical representation as GPU version
-This version is missing the return statement that return the new (if accepted)
+Generates one MCMC sample via HMC simulation - Identical representation as CPU version
+This version is missing the return statement that returns the new (if accepted)
 or old (if rejects) sample since it is only being used for timing purposes
 '''
 def HMC_sample(X,Y,beta,beta_mask,grad_beta,one_n_trans,one_c,momentum,L,eps):
@@ -344,5 +344,5 @@ for i in range(0,len(N)):
             index += 1
             #print 'Configuration ' + str(i) + ',' + str(j) + ',' + str(l) + ' timings: CPU - ' + str(mean_cpu) + ' GPU - ' + str(mean_gpu) + ' Speedup: ' + str(mean_cpu/mean_gpu)
 
-np.savetxt('/home/albeam/manuscripts/HMC_GPU/timings/timings_grad.csv',grad_times,delimiter=',')
-np.savetxt('/home/albeam/manuscripts/HMC_GPU/timings/timings_sample.csv',sample_times,delimiter=',')
+np.savetxt('timings_grad.csv',grad_times,delimiter=',')
+np.savetxt('timings_sample.csv',sample_times,delimiter=',')
