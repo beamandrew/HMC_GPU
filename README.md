@@ -5,6 +5,9 @@ This code can be used to replicate the results found in:
 
 Beam, A.L., Ghosh, S.J., Doyle, J. Fast Hamiltonian Monte Carlo Using GPU Computing. 
 
+The preprint can be accessed here:
+http://arxiv.org/abs/1402.4089
+
 To get started you will need to make sure you have the following depedencies installed:
 
 GPU Computing Environment:
