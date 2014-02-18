@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Wed Aug 14 11:39:25 2013
 
+"""
 @author: Andrew Beam
+This file can be used to replicate the timing results shown in Figures 1,2,3, and 4.
+Code to accompany the manuscript:
+    Beam, A.L., Ghosh, S.J., Doyle, J. Fast Hamiltonian Monte Carlo Using GPU Computing.
 """
 
 ########## BEGIN CPU CODE ##########
