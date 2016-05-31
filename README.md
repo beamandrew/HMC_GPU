@@ -3,7 +3,7 @@ HMC_GPU
 
 This code can be used to replicate the results found in:
 
-Beam, A.L., Ghosh, S.J., Doyle, J. Fast Hamiltonian Monte Carlo Using GPU Computing. 
+[Beam, Andrew L., Sujit K. Ghosh, and Jon Doyle. "Fast hamiltonian monte carlo using gpu computing." Journal of Computational and Graphical Statistics.](http://www.tandfonline.com/doi/abs/10.1080/10618600.2015.1035724#.V0zZ2lfEyJU)
 
 The preprint can be accessed here:
 http://arxiv.org/abs/1402.4089
